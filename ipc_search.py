@@ -1,7 +1,7 @@
 """
 IPC Search Module
 -----------------
-Handles loading, parsing, and keyword-based retrieval for the Indian Penal Code (IPC) dataset.
+Handles loading, parsing, and keyword/section retrieval for the Indian Penal Code (IPC) dataset.
 Designed to be modular, robust, and beginner-friendly for educational purposes.
 """
 
@@ -18,7 +18,7 @@ STOP_WORDS = {
     "penal", "ipc", "law", "act", "can", "you", "i", "how", "does", "do",
     "explain", "give", "details", "on", "with", "from", "as", "at", "be",
     "this", "that", "there", "any", "all", "who", "whom", "whose", "why",
-    "section", "sections", "sec"
+    "section", "sections", "sec", "provisions", "provision"
 }
 
 
@@ -34,7 +34,6 @@ def load_ipc_dataset(filepath: Optional[str] = None) -> Tuple[List[Dict[str, Any
         dataset_list is non-empty if loading succeeds and error_message is None.
         If loading fails, dataset_list is empty and error_message contains details.
     """
-    # Determine possible paths
     candidate_paths = []
     
     if filepath:
@@ -74,7 +73,7 @@ def load_ipc_dataset(filepath: Optional[str] = None) -> Tuple[List[Dict[str, Any
             if not isinstance(item, dict):
                 continue
                 
-            # Safely extract and format fields regardless of int or str types
+            # Safely extract and format fields strictly as strings regardless of JSON data type
             raw_section = item.get("Section", "")
             section_str = str(raw_section).strip()
             
@@ -111,19 +110,55 @@ def load_ipc_dataset(filepath: Optional[str] = None) -> Tuple[List[Dict[str, Any
         return [], f"Unexpected error reading dataset ({target_path}): {str(err)}"
 
 
+def detect_section_request(query: str) -> Optional[str]:
+    """
+    Detects whether a user query specifically requests an IPC section number.
+    Handles variations such as:
+    - 'ipc 34', 'IPC 34', 'IPC section 34', 'ipc sec 34', 'ipc u/s 34'
+    - 'section 34', 'sec 34', 'u/s 34'
+    - 'Section 34A', 'ipc 34a', '120B'
+    - 'what is section 34', 'explain 302', 'tell me about ipc 420'
+    - Standalone numbers: '34', '302'
+    
+    Returns the normalized uppercase section string (e.g., '34', '34A', '120B', '302') or None.
+    """
+    if not query or not query.strip():
+        return None
+        
+    q = query.strip()
+    
+    # 1. Matches with IPC prefixes: 'ipc 34', 'ipc section 34', 'ipc sec 34', 'ipc u/s 34'
+    m = re.search(r"\b(?:ipc\s+section|ipc\s+sec\.?|ipc\s+u/s|ipc)\s*([0-9]{1,3}[a-zA-Z]{0,2})\b", q, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+        
+    # 2. Matches with Section prefix: 'section 34', 'sec 34', 'sec. 34', 'u/s 34'
+    m = re.search(r"\b(?:section|sec\.?|u/s)\s*([0-9]{1,3}[a-zA-Z]{0,2})\b", q, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+        
+    # 3. Section codes containing letters (e.g. '120B', '34A', '376DA')
+    m = re.search(r"\b([0-9]{1,3}[a-zA-Z]{1,2})\b", q)
+    if m:
+        return m.group(1).upper()
+        
+    # 4. Standalone section query or short question: '34', 'what is 34?', 'explain 302'
+    m = re.search(r"^\s*(?:what\s+is\s+|explain\s+|tell\s+me\s+about\s+)?([0-9]{1,3})\s*\??\s*$", q, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+        
+    return None
+
+
 def extract_section_numbers(query: str) -> List[str]:
     """
-    Extracts potential IPC section numbers from a query string.
-    Matches formats like 'Section 302', 'Sec 420A', 'sec. 376', or standalone '302'.
+    Extracts potential section numbers. Kept for backwards compatibility.
+    Uses detect_section_request as primary extractor.
     """
-    matches = re.findall(r"\b(?:section|sec\.?|u/s)?\s*([0-9]{1,3}[a-zA-Z]?)\b", query, flags=re.IGNORECASE)
-    valid_sections = []
-    for m in matches:
-        m_clean = m.strip().upper()
-        # Ensure it starts with 1-3 digits and optionally ends with a letter (e.g., 302, 29A, 120B)
-        if re.match(r"^[0-9]{1,3}[A-Z]?$", m_clean):
-            valid_sections.append(m_clean)
-    return valid_sections
+    detected = detect_section_request(query)
+    if detected:
+        return [detected]
+    return []
 
 
 def tokenize(text: str) -> List[str]:
@@ -142,35 +177,107 @@ def search_ipc_sections(
     min_score: float = 12.0
 ) -> List[Dict[str, Any]]:
     """
-    Searches the IPC dataset using weighted keyword and section-number matching.
+    Searches the IPC dataset.
     
-    Scoring weights:
-    - Target section number match: +100
-    - Exact query phrase in title: +40
-    - Exact query phrase in description: +20
-    - Token match in Section identifier: +50
-    - Token match in section title: +15
-    - Token match in chapter title: +5
-    - Token match in section description: +2 (capped per term)
+    Requirements:
+    1. Detect queries containing an IPC section number ('IPC 34', 'section 34', etc.).
+    2. Match requested section numbers exactly as strings ('34', '34A', '120A', '120B').
+    3. Display exact section first; do NOT include unrelated sections whose descriptions
+       contain matching digits (e.g., '1934' or 'Act 34 of 1934') or unrelated keywords.
+    4. For general queries ('What is theft under IPC?'), retain weighted keyword search
+       and return only the most relevant results.
     
     Returns:
-        List of matching section dictionaries sorted by relevance score descending.
-        Returns an empty list if no record scores >= min_score.
+        List of matching section dictionaries.
     """
     if not query or not query.strip() or not dataset:
         return []
         
     query_clean = query.strip()
-    query_lower = query_clean.lower()
     
-    # 1. Check for explicit section references (e.g., "Section 302")
-    target_sections = extract_section_numbers(query_lower)
+    # ------------------------------------------------------------------
+    # Step 1: Detect explicit section number request (e.g. "IPC 34", "Section 34A")
+    # ------------------------------------------------------------------
+    requested_sec = detect_section_request(query_clean)
     
-    # 2. Tokenize query
-    tokens = tokenize(query_lower)
-    
-    # If the user only typed stop words or special chars and no sections, return empty
-    if not tokens and not target_sections:
+    if requested_sec:
+        # Search dataset for an exact string match on Section
+        exact_match = None
+        for item in dataset:
+            if str(item.get("Section", "")).strip().upper() == requested_sec:
+                exact_match = item.copy()
+                exact_match["relevance_score"] = 100.0
+                break
+                
+        # Determine if the query contained additional substantive keywords
+        tokens = tokenize(query_clean)
+        # Exclude the section identifier and digits that are part of it
+        remaining_tokens = [
+            t for t in tokens 
+            if t.upper() != requested_sec and not (t.isdigit() and t in requested_sec)
+        ]
+        
+        # If the query was purely asking for this section (e.g., 'ipc 34', 'section 34', 'what is section 34')
+        if not remaining_tokens:
+            if exact_match:
+                # Return strictly the requested section with no unrelated matches
+                return [exact_match]
+            else:
+                # Requested section does not exist (e.g., 'Section 34A', 'Section 999')
+                # Never return unrelated sections
+                return []
+        else:
+            # Compound query (e.g., "Section 302 murder penalty")
+            if not exact_match:
+                # Section requested does not exist
+                return []
+                
+            # Put exact match first
+            results = [exact_match]
+            
+            # Search for related sections based on remaining keywords, without matching numbers
+            cleaned_query_phrase = " ".join(remaining_tokens)
+            scored_candidates = []
+            
+            for item in dataset:
+                if str(item.get("Section", "")).strip().upper() == requested_sec:
+                    continue  # Already included first
+                    
+                score = 0.0
+                title_lower = item["section_title"].lower()
+                desc_lower = item["section_desc"].lower()
+                chap_lower = item["chapter_title"].lower()
+                
+                # Match phrase using word boundaries
+                if cleaned_query_phrase and re.search(r"\b" + re.escape(cleaned_query_phrase) + r"\b", title_lower):
+                    score += 30.0
+                    
+                for token in remaining_tokens:
+                    # Ignore purely numeric tokens to avoid matching year/act numbers
+                    if token.isdigit():
+                        continue
+                    if re.search(r"\b" + re.escape(token) + r"\b", title_lower):
+                        score += 15.0
+                    if re.search(r"\b" + re.escape(token) + r"\b", chap_lower):
+                        score += 5.0
+                    desc_matches = len(re.findall(r"\b" + re.escape(token) + r"\b", desc_lower))
+                    if desc_matches > 0:
+                        score += min(desc_matches * 2.0, 8.0)
+                        
+                if score >= min_score:
+                    item_copy = item.copy()
+                    item_copy["relevance_score"] = round(score, 1)
+                    scored_candidates.append(item_copy)
+                    
+            scored_candidates.sort(key=lambda x: x["relevance_score"], reverse=True)
+            results.extend(scored_candidates[:max_results - 1])
+            return results
+
+    # ------------------------------------------------------------------
+    # Step 2: General keyword search (e.g. "What is theft under IPC?")
+    # ------------------------------------------------------------------
+    tokens = tokenize(query_clean)
+    if not tokens:
         return []
         
     cleaned_query_phrase = " ".join(tokens)
@@ -178,37 +285,32 @@ def search_ipc_sections(
     
     for item in dataset:
         score = 0.0
-        sec = item["Section"].upper()
+        sec = str(item.get("Section", "")).strip().upper()
         title_lower = item["section_title"].lower()
         desc_lower = item["section_desc"].lower()
         chap_title_lower = item["chapter_title"].lower()
         
-        # Priority 1: Direct Section Match
-        if sec in target_sections:
-            score += 100.0
+        # Priority A: Exact title match (e.g. title is exactly 'Theft')
+        if title_lower == cleaned_query_phrase:
+            score += 60.0
+        elif cleaned_query_phrase and re.search(r"\b" + re.escape(cleaned_query_phrase) + r"\b", title_lower):
+            score += 35.0
             
-        # Priority 2: Phrase matching
-        if cleaned_query_phrase:
-            if cleaned_query_phrase in title_lower:
-                score += 40.0
-            elif cleaned_query_phrase in desc_lower:
-                score += 20.0
-                
-        # Priority 3: Token-level keyword matching
+        # Priority B: Token-level keyword matching with word boundaries
         for token in tokens:
-            # Token matches the section number itself (e.g. user typed "302" or "420")
-            if token == sec.lower():
+            # Exact section number match if user typed a number as keyword
+            if token.upper() == sec:
                 score += 50.0
                 
-            # Title match (high relevance)
+            # Title word match
             if re.search(r"\b" + re.escape(token) + r"\b", title_lower):
-                score += 15.0
+                score += 20.0
                 
-            # Chapter match (contextual relevance)
+            # Chapter word match
             if re.search(r"\b" + re.escape(token) + r"\b", chap_title_lower):
                 score += 5.0
                 
-            # Description match (content relevance, capped per token)
+            # Description word match using word boundaries
             desc_matches = len(re.findall(r"\b" + re.escape(token) + r"\b", desc_lower))
             if desc_matches > 0:
                 score += min(desc_matches * 2.0, 10.0)
@@ -218,7 +320,6 @@ def search_ipc_sections(
             result_item["relevance_score"] = round(score, 1)
             scored_results.append(result_item)
             
-    # Sort descending by relevance score
     scored_results.sort(key=lambda x: x["relevance_score"], reverse=True)
     return scored_results[:max_results]
 

@@ -1,6 +1,6 @@
 # ⚖️ IPC Legal Assistant
 
-An interactive, AI-assisted legal chatbot built for college coursework in **Cyber Laws and Information Crime (CLIC)**. This project enables students, researchers, and legal enthusiasts to search, navigate, and understand the **Indian Penal Code (IPC), 1860** using local dataset parsing and Google Gemini AI synthesis.
+An interactive, AI-assisted legal chatbot built for college coursework in **Cyber Laws and Information Crime (CLIC)**. This project enables students, researchers, and legal enthusiasts to search, navigate, and understand the **Indian Penal Code (IPC), 1860** using local dataset parsing and a pluggable, multi-provider AI synthesis interface.
 
 ---
 
@@ -9,45 +9,53 @@ An interactive, AI-assisted legal chatbot built for college coursework in **Cybe
 The **Indian Penal Code (IPC)** served as the foundational criminal code of India from 1860 until it was replaced by the **Bharatiya Nyaya Sanhita (BNS)** on **1 July 2024**. For offenses committed prior to 1 July 2024, the IPC remains the substantive law applied in pending investigations and legal proceedings.
 
 This project fulfills the following objectives:
-1. **Direct Statutory Retrieval**: Search through all 575 sections of the IPC using fast, keyword-weighted algorithms.
-2. **AI-Powered Synthesis**: Send retrieved sections and queries to the **Google Gemini API** to generate plain-language explanations with accurate statutory references.
-3. **No Hallucination Architecture**: If no relevant sections match the query, the chatbot explains that the dataset does not have sufficient information rather than fabricating non-existent provisions.
-4. **Beginner-Friendly & Modular**: Uses standard Python and Streamlit without heavy machine learning frameworks or complicated setup.
-5. **Offline Readiness**: Can run in offline retrieval mode immediately without requiring an API key.
+1. **Direct Statutory Retrieval**: Search through all 575 sections of the IPC using fast, keyword-weighted algorithms and exact section number string matching.
+2. **Multi-Provider AI Synthesis**: A common abstraction layer (`ai_provider.py`) isolates AI integration, allowing effortless switching between **Google Gemini**, **Groq**, and **OpenRouter** simply by modifying environment variables.
+3. **No Hallucination Architecture**: If no relevant sections match the query or a non-existent section is requested, the chatbot explains that the dataset does not have sufficient information rather than fabricating legal provisions.
+4. **Beginner-Friendly & Modular**: Uses standard Python and Streamlit with zero complex machine learning pipelines.
+5. **Offline Readiness & Graceful Fallback**: If an API key is missing or the external AI service encounters downtime/rate-limits, the chatbot automatically displays the exact statutory provisions and original legal text from the local dataset.
 
 ---
 
 ## 🏗️ System Architecture
 
 ```
-User Query
+User Query (e.g., "IPC 34" or "What is theft?")
     │
     ▼
 [Streamlit Interface (app.py)]
     │
     ▼
-[Keyword Search Engine (ipc_search.py)]
+[Keyword & Section Search Engine (ipc_search.py)]
     │
-    ├── Loads data/ipc.json (575 sections)
-    ├── Extracts section numbers (e.g., "302", "420")
-    ├── Tokenizes and filters stop-words
-    └── Ranks sections by title, chapter, and text relevance
+    ├── Exact Section Query (e.g. "IPC 34", "Section 34A")
+    │        ├── Match Found ──> Returns strictly that section (no noisy digits)
+    │        └── Not Found   ──> Informs user: "Section not found in dataset"
     │
-    ├── (No sections found) ──> Informs user: "Not in dataset"
+    └── General Keyword Query (e.g. "What is theft?")
+             └── Ranks by title phrase, section title, and statutory description
     │
     ▼
-(Top 1–4 Matching Sections Retrieved)
+(Top Matching Sections Retrieved from data/ipc.json)
     │
-    ├── [GEMINI_API_KEY Configured?]
-    │        ├── YES ──> Prompts Gemini with strict legal ground rules:
-    │        │           • Only use retrieved text
-    │        │           • Mention BNS 2024 transition
-    │        │           • Output student-friendly synthesis
-    │        │
-    │        └── NO  ──> Displays retrieved statutory sections directly
-    │                    with an informative setup guide
     ▼
-[Streamlit Chat Response + Expandable Citations]
+[Pluggable AI Provider Layer (ai_provider.py)]
+    │
+    ├── Checks .env Configuration:
+    │        • AI_PROVIDER: gemini | groq | openrouter
+    │        • AI_API_KEY
+    │        • AI_MODEL (Optional)
+    │
+    ├── Provider Execution:
+    │        ├── Google Gemini  ──> google-genai SDK (with 503 exponential backoff)
+    │        ├── Groq           ──> groq SDK (high-speed inference)
+    │        └── OpenRouter     ──> unified REST completions API
+    │
+    ├── [Success] ──> Synthesized legal explanation + expandable source cards
+    └── [Failure / Key Missing] ──> Graceful Fallback:
+                                    • States AI is unavailable
+                                    • Displays exact Section number & title
+                                    • Displays original legal text from JSON
 ```
 
 ---
@@ -57,9 +65,10 @@ User Query
 ```
 ChatBot/
 ├── Data/
-│   └── ipc.json           # Canonical IPC dataset (575 sections)
-├── app.py                 # Streamlit web application & UI
-├── ipc_search.py          # Dataset parser, tokenizer, and keyword search
+│   └── ipc.json           # Canonical IPC dataset (575 sections, untouched)
+├── app.py                 # Streamlit web application & UI orchestrator
+├── ai_provider.py         # Multi-provider AI interface (Gemini, Groq, OpenRouter)
+├── ipc_search.py          # Dataset parser, tokenizer, and section retrieval
 ├── requirements.txt       # Project Python dependencies
 ├── .env.example           # Template for environment configuration
 ├── .gitignore             # Ignores .env, cache files, and virtualenvs
@@ -78,88 +87,87 @@ ChatBot/
   ```
 
 ### 2. Install Dependencies
-Open your terminal (PowerShell, Command Prompt, or Bash) in the project directory:
+Open your terminal in the project directory:
 
 ```bash
 cd D:\College\MTech\CLIC\ChatBot
 pip install -r requirements.txt
 ```
 
-The key dependencies installed are:
-* `streamlit`: Fast web UI framework for Python.
-* `google-genai`: Official Google Gemini AI Python SDK.
-* `python-dotenv`: Loads environment variables from `.env`.
+Installed packages:
+* `streamlit`: Web user interface.
+* `google-genai`: Official Google Gemini AI SDK.
+* `groq`: Official Groq Cloud SDK.
+* `requests`: HTTP client for OpenRouter.
+* `python-dotenv`: Environment variable loader.
 
 ---
 
-## 🔑 Gemini API Key Configuration (Optional for initial setup)
+## 🤖 Configuring AI Providers
 
-The chatbot is built to run **immediately without an API key** in offline mode. To enable AI-generated summaries:
+Switch providers at any time by updating your `.env` file. You do **not** need to touch `app.py` or any source code.
 
-1. **Obtain a Free Key**:
-   Visit [Google AI Studio](https://aistudio.google.com/) and click **"Get API key"**.
+Copy the example template:
+```bash
+cp .env.example .env
+```
 
-2. **Configure `.env`**:
-   Copy `.env.example` to create a file named `.env`:
-   ```bash
-   cp .env.example .env
-   ```
-   *(Or create a new file named `.env` in the `ChatBot` folder).*
-
-3. **Add your API Key**:
+### Option 1: Google Gemini (Default)
+1. Get a free API key at [Google AI Studio](https://aistudio.google.com/).
+2. Set in `.env`:
    ```env
-   GEMINI_API_KEY=your_actual_gemini_api_key_here
+   AI_PROVIDER=gemini
+   AI_API_KEY=your_gemini_api_key_here
+   AI_MODEL=gemini-2.5-flash
    ```
+   *(Legacy key name `GEMINI_API_KEY` is also supported automatically).*
 
-4. `.env` is automatically ignored by `.gitignore` to prevent leaking API credentials.
+### Option 2: Groq (Ultra-Fast Inference)
+1. Get a free API key at [Groq Console](https://console.groq.com/).
+2. Set in `.env`:
+   ```env
+   AI_PROVIDER=groq
+   AI_API_KEY=your_groq_api_key_here
+   AI_MODEL=qwen/qwen3.8-27b
+   ```
+   *(Or use `AI_MODEL=openai/gpt-oss-120b`).*
+
+### Option 3: OpenRouter (Unified API Access)
+1. Get an API key at [OpenRouter](https://openrouter.ai/).
+2. Set in `.env`:
+   ```env
+   AI_PROVIDER=openrouter
+   AI_API_KEY=your_openrouter_api_key_here
+   AI_MODEL=meta-llama/llama-3.3-70b-instruct:free
+   ```
 
 ---
 
 ## 🚀 How to Run the Application
 
-Run the Streamlit application from your terminal:
+Start the Streamlit application:
 
 ```bash
 streamlit run app.py
 ```
 
-Streamlit will launch local web server and open the browser at:
+Open your browser at:
 ```
 http://localhost:8501
 ```
 
-*(If port 8501 is occupied, Streamlit will automatically pick the next available port like 8502).*
+If no API key is provided, the application automatically runs in **Offline Retrieval Mode**, allowing you to test dataset search and view original legal texts immediately.
 
 ---
 
-## 🔍 How Search & AI Generation Work
+## 🛡️ Error Handling & Graceful Fallbacks
 
-### 1. Dataset Structure
-Each record in `data/ipc.json` contains:
-* `chapter`: Integer chapter number.
-* `chapter_title`: Name of the chapter (e.g., *"OF OFFENCES AGAINST THE HUMAN BODY"*).
-* `Section`: Section number or code (e.g., `302`, `29A`, `420`).
-* `section_title`: Official title of the section (e.g., *"Punishment for murder"*).
-* `section_desc`: Full statutory definition and penal provisions.
-
-### 2. Search & Retrieval Pipeline (`ipc_search.py`)
-1. **Section Extraction**: Regular expressions identify queries mentioning section numbers (e.g., `"Section 302"`, `"sec 420A"`, or `"378"`). If matched, that section receives a **+100 score priority**.
-2. **Tokenization & Stop Words**: Removes conversational filler words (`what`, `is`, `punishment`, `for`, `tell`, `me`) while retaining legal nouns (`theft`, `murder`, `cheating`, `record`).
-3. **Multi-Field Weighted Scoring**:
-   * Exact query phrase in title: `+40`
-   * Query phrase in section description: `+20`
-   * Keyword match in section number: `+50`
-   * Keyword match in section title: `+15`
-   * Keyword match in chapter title: `+5`
-   * Keyword match in description: `+2` per occurrence
-4. **Relevance Threshold**: Sections scoring below the threshold (`12.0`) are excluded. If no sections meet this criteria, search returns empty.
-
-### 3. AI Grounding & Prompt Strategy
-When an API key is present:
-* The retrieved sections are formatted into an isolated context block.
-* Gemini is instructed to **act strictly as an academic legal assistant**.
-* Gemini is bound to use **only the retrieved legal text** to avoid fabricating punishments or section numbers.
-* The model is mandated to highlight the **historical transition** from the IPC (1860) to the **Bharatiya Nyaya Sanhita (BNS), 2023** effective 1 July 2024.
+The AI provider abstraction handles edge cases gracefully:
+* **HTTP 503 (Overloaded):** Retries up to 3 times with exponential backoff (2s, 4s, 8s). If all retries fail, a user-friendly notice is shown.
+* **HTTP 429 (Rate Limit):** Immediately caught and presented as a polite quota-exceeded message without locking the UI.
+* **HTTP 401 (Invalid Key):** Notifies the user to check their `.env` credentials.
+* **Timeouts / Disconnections:** Informs the user of connection difficulties.
+* **Guaranteed Fallback:** In all error conditions, the matched statutory provisions from `data/ipc.json` are rendered with their exact Section numbers, titles, and statutory descriptions.
 
 ---
 
