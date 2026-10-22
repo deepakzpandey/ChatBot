@@ -17,23 +17,23 @@ from typing import List, Dict, Any, Optional, Tuple
 import requests
 
 
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------
 # Strict Legal Grounding System Instruction
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------
 LEGAL_SYSTEM_INSTRUCTION = (
-    "You are an academic IPC (Indian Penal Code) Legal Assistant designed for college students "
-    "studying Cyber Laws and Information Crime. Your duty is to explain legal provisions accurately, "
-    "clearly, and objectively.\n\n"
-    "STRICT LEGAL ACCURACY RULES:\n"
+    "You are an IPC (Indian Penal Code) Legal Assistant for an academic legal project. "
+    "Explain legal provisions accurately, clearly, and directly.\n\n"
+    "STRICT GROUNDING & PRESENTATION RULES:\n"
     "1. PRIMARY SOURCE: Rely strictly on the provided IPC sections below. Do NOT invent, assume, or fabricate "
     "any section numbers, offenses, or punishments.\n"
     "2. FACT VERIFICATION: Distinguish explicitly between what is directly codified in the retrieved text "
-    "and any unverified general legal principles. If a specific detail is not stated in the text, explicitly state so.\n"
-    "3. HISTORICAL CONTEXT & BNS TRANSITION: When answering, note that the Indian Penal Code (IPC), 1860 was replaced "
-    "by the Bharatiya Nyaya Sanhita (BNS), 2023 on 1 July 2024. Clarify that IPC applies to offences committed on or before "
-    "30 June 2024 (subject to transitional provisions), while BNS governs offences committed on or after 1 July 2024.\n"
-    "4. CITATION: Explicitly cite the IPC Section number(s) and title(s) in your explanation.\n"
-    "5. DISCLAIMER: Always maintain an educational tone and remind the user that this does not constitute formal legal counsel."
+    "and any general context. If a detail is not stated in the text, explicitly state so.\n"
+    "3. LEGAL ACCURACY & CURRENT STATUS: If the user asks about current law, note that the IPC (1860) was replaced "
+    "by the Bharatiya Nyaya Sanhita (BNS, 2023) effective 1 July 2024 (governing offences committed on or after 1 July 2024, "
+    "with IPC applying to prior offences). Only mention BNS if directly relevant to the user's question.\n"
+    "4. DIRECT PRESENTATION: Answer directly. Do NOT repeat the question. Do NOT include generic conversational filler.\n"
+    "5. NO REPETITIVE DISCLAIMERS: Do NOT append generic educational or legal disclaimers to each answer.\n"
+    "6. CITATION: Explicitly cite the IPC Section number(s) and title(s) in your explanation."
 )
 
 
@@ -87,7 +87,7 @@ class BaseAIProvider(ABC):
             f"{context_text}\n"
             f"===========================================\n\n"
             f"USER QUESTION: {user_query}\n\n"
-            f"Please provide a structured, simple explanation:"
+            f"Provide a clear, direct explanation based strictly on the sections above:"
         )
 
     @abstractmethod
@@ -101,6 +101,17 @@ class BaseAIProvider(ABC):
         Generates an answer based on the query and retrieved IPC sections.
         Returns:
             (response_text, error_message)
+        """
+        pass
+
+    @abstractmethod
+    def stream_response(
+        self,
+        user_query: str,
+        retrieved_sections: List[Dict[str, Any]]
+    ):
+        """
+        Yields text chunks progressively as they arrive from the AI provider.
         """
         pass
 
@@ -208,6 +219,41 @@ class GeminiProvider(BaseAIProvider):
                 )
 
         return None, "Gemini service is currently unavailable. Please try again later."
+
+    def stream_response(
+        self,
+        user_query: str,
+        retrieved_sections: List[Dict[str, Any]]
+    ):
+        if not self.is_configured():
+            raise ValueError("Gemini API key is not configured in .env.")
+
+        user_content = self.build_user_prompt(user_query, retrieved_sections)
+        combined_prompt = f"{LEGAL_SYSTEM_INSTRUCTION}\n\n{user_content}"
+
+        try:
+            from google import genai
+            client = genai.Client(api_key=self.api_key)
+            stream = client.models.generate_content_stream(
+                model=self.model,
+                contents=combined_prompt
+            )
+            for chunk in stream:
+                if chunk and chunk.text:
+                    yield chunk.text
+            return
+        except Exception as primary_err:
+            try:
+                import google.generativeai as genai_legacy
+                genai_legacy.configure(api_key=self.api_key)
+                legacy_model = genai_legacy.GenerativeModel("gemini-1.5-flash")
+                stream = legacy_model.generate_content(combined_prompt, stream=True)
+                for chunk in stream:
+                    if chunk and chunk.text:
+                        yield chunk.text
+                return
+            except Exception:
+                raise primary_err
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +376,51 @@ class GroqProvider(BaseAIProvider):
 
         return None, "Groq service unavailable after multiple retries."
 
+    def stream_response(
+        self,
+        user_query: str,
+        retrieved_sections: List[Dict[str, Any]]
+    ):
+        if not self.is_configured():
+            raise ValueError("Groq API key is not configured in .env.")
+
+        from groq import Groq, NotFoundError
+        client = Groq(api_key=self.api_key)
+
+        user_content = self.build_user_prompt(user_query, retrieved_sections)
+        messages = [
+            {"role": "system", "content": LEGAL_SYSTEM_INSTRUCTION},
+            {"role": "user", "content": user_content}
+        ]
+
+        models_to_try = [self.model]
+        for alt in ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
+            if alt not in models_to_try:
+                models_to_try.append(alt)
+
+        stream = None
+        last_err = None
+        for m in models_to_try:
+            try:
+                stream = client.chat.completions.create(
+                    model=m,
+                    messages=messages,
+                    temperature=0.2,
+                    max_tokens=1024,
+                    stream=True
+                )
+                break
+            except NotFoundError as err:
+                last_err = err
+                continue
+
+        if stream is None:
+            raise last_err or RuntimeError("No compatible Groq model found.")
+
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
 
 # ---------------------------------------------------------------------------
 # OpenRouter Provider Adapter
@@ -424,6 +515,54 @@ class OpenRouterProvider(BaseAIProvider):
 
         return None, "OpenRouter service unavailable after multiple retries."
 
+    def stream_response(
+        self,
+        user_query: str,
+        retrieved_sections: List[Dict[str, Any]]
+    ):
+        if not self.is_configured():
+            raise ValueError("OpenRouter API key is not configured in .env.")
+
+        import json
+        user_content = self.build_user_prompt(user_query, retrieved_sections)
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": LEGAL_SYSTEM_INSTRUCTION},
+                {"role": "user", "content": user_content}
+            ],
+            "temperature": 0.2,
+            "stream": True
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "HTTP-Referer": "http://localhost:8501",
+            "X-Title": "IPC Legal Assistant",
+            "Content-Type": "application/json"
+        }
+
+        resp = requests.post(self.API_URL, headers=headers, json=payload, stream=True, timeout=35)
+        if resp.status_code != 200:
+            raise RuntimeError(f"OpenRouter returned status code {resp.status_code}")
+
+        for line in resp.iter_lines():
+            if line:
+                decoded_line = line.decode("utf-8").strip()
+                if decoded_line.startswith("data: "):
+                    data_str = decoded_line[6:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(data_str)
+                        choices = data.get("choices", [])
+                        if choices:
+                            delta = choices[0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                yield content
+                    except Exception:
+                        continue
+
 
 # ---------------------------------------------------------------------------
 # Unsupported / Invalid Provider Placeholder
@@ -445,6 +584,13 @@ class InvalidConfigProvider(BaseAIProvider):
 
     def is_configured(self) -> bool:
         return False
+
+    def stream_response(
+        self,
+        user_query: str,
+        retrieved_sections: List[Dict[str, Any]]
+    ):
+        raise ValueError(f"Unsupported AI_PROVIDER '{self._requested_name}'.")
 
     def generate_response(
         self,

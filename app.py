@@ -1,85 +1,100 @@
 """
 IPC Legal Assistant
 -------------------
-A web-based legal assistant chatbot for exploring and understanding the Indian Penal Code (IPC).
-Developed as a college project for the subject Cyber Laws and Information Crime (CLIC).
+A clean, professional legal assistant chatbot for exploring and understanding the Indian Penal Code (IPC).
+Developed for the subject Cyber Laws and Information Crime (CLIC).
 
-Powered by Python, Streamlit, local keyword retrieval, and configurable AI providers (Gemini, Groq, OpenRouter).
+Supports real-time token streaming, multi-provider AI integration, and graceful dataset fallback.
 """
 
 import os
 import time
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Generator
 import streamlit as st
 from dotenv import load_dotenv
 
-# Import the local IPC search and dataset module
-from ipc_search import load_ipc_dataset, search_ipc_sections, format_sections_for_prompt, detect_section_request
+# Import dataset parser and search logic
+from ipc_search import load_ipc_dataset, search_ipc_sections, detect_section_request
 
-# Import the multi-provider AI interface
+# Import multi-provider AI interface
 from ai_provider import get_ai_provider, BaseAIProvider, GeminiProvider
 
-# Load environment variables from .env file if present
+# Load environment configuration
 load_dotenv()
 
 
 # ---------------------------------------------------------
-# Page Configuration & Styling
+# Page Configuration & Adaptive Theme Styling
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="IPC Legal Assistant",
     page_icon="⚖️",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="centered",
+    initial_sidebar_state="collapsed",
+    menu_items={
+        "Get Help": None,
+        "Report a bug": None,
+        "About": None
+    }
 )
 
-# Custom CSS for a clean, academic, legal interface
+# Adaptive CSS compatible with both dark and light themes
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 2.2rem;
+    /* Hide Streamlit default top-right menu (Print, Record screen, etc.), toolbar, and footer */
+    #MainMenu,
+    [data-testid="stToolbar"],
+    [data-testid="stDecoration"],
+    div[data-testid="stStatusWidget"],
+    footer {
+        visibility: hidden !important;
+        display: none !important;
+    }
+
+    /* Global container adjustments */
+    .block-container {
+        padding-top: 1.8rem;
+        padding-bottom: 2.5rem;
+        max-width: 820px;
+    }
+    
+    /* Header typography */
+    .app-title {
+        font-size: 2.1rem;
         font-weight: 700;
-        color: #1e3a8a;
-        margin-bottom: 0.2rem;
+        margin-bottom: 0.15rem;
+        letter-spacing: -0.02em;
     }
-    .sub-header {
-        font-size: 1.05rem;
-        color: #4b5563;
-        margin-bottom: 1.5rem;
+    .app-subtitle {
+        font-size: 1.0rem;
+        opacity: 0.75;
+        margin-bottom: 1.25rem;
+        font-weight: 400;
     }
-    .legal-card {
-        background-color: #f8fafc;
-        border-left: 4px solid #1e3a8a;
-        padding: 12px 16px;
-        margin-bottom: 10px;
-        border-radius: 4px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
-    .disclaimer-box {
+    
+    /* Suggested query label */
+    .suggestion-label {
         font-size: 0.82rem;
-        color: #64748b;
-        background-color: #f1f5f9;
-        border-radius: 6px;
-        padding: 10px;
-        margin-top: 15px;
-        line-height: 1.4;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        opacity: 0.65;
+        margin-bottom: 0.5rem;
     }
-    .bns-box {
-        font-size: 0.85rem;
-        background-color: #eff6ff;
-        border-left: 3px solid #3b82f6;
-        padding: 10px;
-        border-radius: 4px;
-        margin-top: 10px;
-        color: #1e40af;
+
+    /* Subtle thinking indicator */
+    .thinking-indicator {
+        font-size: 0.88rem;
+        font-style: italic;
+        opacity: 0.7;
+        margin-bottom: 0.5rem;
     }
-    .setup-box {
-        background-color: #fffbeb;
-        border-left: 3px solid #f59e0b;
-        padding: 10px;
-        border-radius: 4px;
-        font-size: 0.85rem;
-        color: #92400e;
+
+    /* Chat message spacing polish */
+    [data-testid="stChatMessage"] {
+        padding: 0.9rem 1rem;
+        margin-bottom: 0.5rem;
+        border-radius: 8px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -88,9 +103,9 @@ st.markdown("""
 # ---------------------------------------------------------
 # Dataset Caching
 # ---------------------------------------------------------
-@st.cache_data(show_spinner="Loading IPC Dataset...")
+@st.cache_data(show_spinner=False)
 def get_cached_ipc_dataset() -> Tuple[List[Dict[str, Any]], Optional[str]]:
-    """Loads and caches the IPC dataset to avoid reading disk on every rerun."""
+    """Loads and caches the IPC dataset."""
     return load_ipc_dataset()
 
 
@@ -103,102 +118,30 @@ def generate_gemini_response(
     retrieved_sections: List[Dict[str, Any]],
     sleep_fn: Any = time.sleep
 ) -> Tuple[Optional[str], Optional[str]]:
-    """Backward-compatible helper that delegates to GeminiProvider."""
+    """Legacy helper for backward compatibility; delegates to GeminiProvider."""
     p = GeminiProvider(api_key=api_key)
     return p.generate_response(user_query, retrieved_sections, sleep_fn=sleep_fn)
 
 
 # ---------------------------------------------------------
-# Sidebar Component
+# Sidebar Component (Minimal & Professional)
 # ---------------------------------------------------------
-def render_sidebar(dataset_count: int, provider: BaseAIProvider):
+def render_sidebar():
     with st.sidebar:
-        st.markdown("## ⚖️ About Project")
+        st.markdown("### ⚖️ IPC Legal Assistant")
+        st.caption("Cyber Laws & Information Crime | College Project")
+        st.markdown("---")
+        
         st.markdown(
-            "**IPC Legal Assistant** is an educational chatbot developed for "
-            "the academic course **Cyber Laws and Information Crime**."
+            "This application provides direct retrieval from the historical "
+            "**Indian Penal Code, 1860** dataset coupled with real-time AI-assisted analysis."
         )
-        st.divider()
+        st.markdown("---")
         
-        # Dataset Status Indicator
-        st.markdown("### 📊 Dataset Status")
-        if dataset_count > 0:
-            st.success(f"✓ IPC Dataset: **{dataset_count} Sections** Loaded")
-        else:
-            st.error("✗ IPC Dataset: Not Loaded")
-            
-        # AI Provider Status Indicator
-        st.markdown("### 🤖 AI Provider Configuration")
-        if provider.is_configured():
-            st.success(f"✓ **{provider.name}**: Active\n\nModel: `{provider.model}`")
-        else:
-            st.warning(f"⚠️ **{provider.name}**: Key Not Set\n\n*(Running in Offline Retrieval Mode)*")
-            
-        with st.expander("⚙️ Provider & API Setup Guide"):
-            st.markdown(
-                """
-                Switch AI providers anytime in `.env` without changing code:
-                
-                **1. Google Gemini (Default)**
-                ```bash
-                AI_PROVIDER=gemini
-                AI_API_KEY=your_gemini_key
-                AI_MODEL=gemini-2.5-flash
-                ```
-                *Free key: [Google AI Studio](https://aistudio.google.com/)*
-
-                **2. Groq (High Speed)**
-                ```bash
-                AI_PROVIDER=groq
-                AI_API_KEY=your_groq_key
-                AI_MODEL=qwen/qwen3.8-27b
-                ```
-                *Free key: [Groq Console](https://console.groq.com/)*
-
-                **3. OpenRouter (Unified API)**
-                ```bash
-                AI_PROVIDER=openrouter
-                AI_API_KEY=your_openrouter_key
-                AI_MODEL=meta-llama/llama-3.3-70b-instruct:free
-                ```
-                *Key: [OpenRouter](https://openrouter.ai/)*
-                
-                *(You can still search and view raw IPC sections without an API key!)*
-                """
-            )
-                
-        st.divider()
-        
-        # BNS 2024 Legal Context
-        st.markdown(
-            """
-            <div class="bns-box">
-                <strong>🏛️ BNS 2024 Transition:</strong><br>
-                The Indian Penal Code (1860) was repealed and replaced by the 
-                <strong>Bharatiya Nyaya Sanhita (BNS), 2023</strong> effective 
-                <strong>1 July 2024</strong>. Offences committed prior remain 
-                prosecutable under the IPC.
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-        
-        # Legal Disclaimer
-        st.markdown(
-            """
-            <div class="disclaimer-box">
-                <strong>⚠️ Legal Disclaimer:</strong><br>
-                This system is an academic demonstration developed for university study. 
-                It does not constitute legal advice, representation, or authoritative statutory text. 
-                Consult a qualified legal advocate for actual legal matters.
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-        
-        st.divider()
-        if st.button("🗑️ Clear Conversation", use_container_width=True):
+        if st.button("🗑️ Clear Chat", use_container_width=True):
             st.session_state.messages = []
+            if "pending_prompt" in st.session_state:
+                del st.session_state["pending_prompt"]
             st.rerun()
 
 
@@ -209,58 +152,46 @@ def main():
     # Load dataset
     dataset, load_error = get_cached_ipc_dataset()
     
-    # Initialize the configured AI Provider (Gemini, Groq, OpenRouter)
+    # Initialize configured AI Provider (Groq, Gemini, OpenRouter)
     provider = get_ai_provider()
-    api_configured = provider.is_configured()
     
     # Render Sidebar
-    render_sidebar(len(dataset), provider)
+    render_sidebar()
     
-    # Main Header
-    st.markdown('<div class="main-header">⚖️ IPC Legal Assistant</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="sub-header">'
-        'Search Indian Penal Code (IPC) provisions, understand penalties, and review legal definitions.'
-        '</div>',
-        unsafe_allow_html=True
-    )
+    # Homepage Header
+    st.markdown('<div class="app-title">⚖️ IPC Legal Assistant</div>', unsafe_allow_html=True)
+    st.markdown('<div class="app-subtitle">Your assistant for exploring the Indian Penal Code.</div>', unsafe_allow_html=True)
     
-    # If dataset failed to load, display clear error and halt
+    # Dataset failure safety
     if load_error or not dataset:
-        st.error(
-            f"❌ **Dataset Loading Failed:** {load_error or 'No records found.'}\n\n"
-            "Please ensure `data/ipc.json` is located in the project directory."
-        )
+        st.error("IPC dataset could not be loaded. Please ensure `data/ipc.json` is present.")
         return
-        
-    # Inform user if running in offline keyword mode
-    if not api_configured:
-        st.info(
-            f"ℹ️ **Running in Keyword Search Mode:** No API key detected for {provider.name}. "
-            "The assistant will retrieve matching IPC sections directly from the dataset. "
-            "To enable AI explanations, configure `AI_API_KEY` in `.env`."
-        )
 
     # Initialize chat history in session state
     if "messages" not in st.session_state:
         st.session_state.messages = []
-        
-    # Display welcome banner if chat is empty
-    if len(st.session_state.messages) == 0:
-        with st.container():
-            st.markdown("### 💬 Suggested Queries")
-            st.markdown("You can ask about specific sections, offences, or cyber-related definitions:")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("- **Section 302:** *What is the punishment for murder?*")
-                st.markdown("- **Section 378 & 379:** *What constitutes theft and its punishment?*")
-            with col2:
-                st.markdown("- **Section 420:** *Explain cheating and dishonest delivery of property.*")
-                st.markdown("- **Section 29A:** *How does IPC define an electronic record?*")
-            st.divider()
 
-    # Render previous messages from history
+    # Display suggested queries if conversation is empty
+    if len(st.session_state.messages) == 0 and "pending_prompt" not in st.session_state:
+        st.markdown('<div class="suggestion-label">Suggested Questions</div>', unsafe_allow_html=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("⚖️ What is Section 34?", use_container_width=True):
+                st.session_state.pending_prompt = "What is Section 34?"
+                st.rerun()
+            if st.button("📖 What constitutes theft under IPC?", use_container_width=True):
+                st.session_state.pending_prompt = "What constitutes theft under IPC?"
+                st.rerun()
+        with col2:
+            if st.button("⚠️ Punishment for murder (Section 302)", use_container_width=True):
+                st.session_state.pending_prompt = "What is the punishment for murder under Section 302?"
+                st.rerun()
+            if st.button("💻 Electronic record definition (Section 29A)", use_container_width=True):
+                st.session_state.pending_prompt = "How is an electronic record defined under Section 29A?"
+                st.rerun()
+        st.markdown("<div style='margin-bottom: 1.0rem;'></div>", unsafe_allow_html=True)
+
+    # Render previous messages from history in correct chronological order
     for message in st.session_state.messages:
         role = message.get("role", "user")
         content = message.get("content", "")
@@ -269,53 +200,54 @@ def main():
         with st.chat_message(role):
             st.markdown(content)
             
-            # If there are attached sections, render them in an expander
+            # Display relevant IPC section references below the answer
             if sections:
-                is_fallback = "temporarily unavailable" in content or "not configured" in content
-                with st.expander(f"📚 View Retrieved IPC Sections ({len(sections)})", expanded=is_fallback):
+                with st.expander(f"📚 Relevant IPC Sections ({len(sections)})"):
                     for s in sections:
                         st.markdown(
                             f"**Section {s.get('Section')}: {s.get('section_title')}** "
                             f"*(Chapter {s.get('chapter')}: {s.get('chapter_title')})*"
                         )
-                        st.markdown(f"**Original Legal Text:**\n> {s.get('section_desc')}")
+                        st.markdown(f"> {s.get('section_desc')}")
                         st.divider()
 
-    # Chat Input Box
-    user_query = st.chat_input("Ask a question about IPC sections, offences, or penalties...")
-    
+    # Capture user input (from chat input or from suggested question click)
+    chat_input_val = st.chat_input("Ask about an IPC section, offence, or legal definition...")
+    user_query = None
+
+    if "pending_prompt" in st.session_state and st.session_state.pending_prompt:
+        user_query = st.session_state.pop("pending_prompt")
+    elif chat_input_val:
+        user_query = chat_input_val
+
     if user_query:
         query_text = user_query.strip()
         if not query_text:
             return
             
-        # 1. Display User Message
+        # 1. Display User Message Immediately
         st.session_state.messages.append({"role": "user", "content": query_text})
         with st.chat_message("user"):
             st.markdown(query_text)
             
         # 2. Retrieve Relevant Sections from IPC dataset
         requested_sec = detect_section_request(query_text)
-        matching_sections = search_ipc_sections(query_text, dataset, max_results=4)
+        matching_sections = search_ipc_sections(query_text, dataset, max_results=3)
         
-        # 3. Generate Assistant Response
+        # 3. Generate Assistant Response (with Real-Time Streaming)
         with st.chat_message("assistant"):
             # Case A: No sections found in dataset
             if not matching_sections:
                 if requested_sec:
                     no_results_text = (
                         f"Section **{requested_sec}** was not found in the Indian Penal Code (IPC) dataset.\n\n"
-                        f"The IPC dataset does not contain Section {requested_sec}. "
-                        "Please verify the section number or check whether this provision belongs to other legislation "
-                        "(such as the Information Technology Act 2000 or the new Bharatiya Nyaya Sanhita 2023)."
+                        f"The IPC dataset does not contain Section {requested_sec}. Please verify the section number "
+                        "or check whether this provision belongs to other legislation (such as the IT Act, 2000 or the Bharatiya Nyaya Sanhita, 2023)."
                     )
                 else:
                     no_results_text = (
-                        "I could not find any relevant sections in the Indian Penal Code (IPC) dataset matching your query.\n\n"
-                        "The available dataset does not contain sufficient information regarding this matter. "
-                        "Please verify your keywords or section number and try again.\n\n"
-                        "*Note: Special legislation like the Information Technology Act, 2000 or provisions enacted under "
-                        "the new Bharatiya Nyaya Sanhita (BNS), 2023 may not be part of this historical IPC dataset.*"
+                        "No matching sections were found in the Indian Penal Code (IPC) dataset for your query.\n\n"
+                        "Please verify your keywords or section number and try again."
                     )
                 st.markdown(no_results_text)
                 st.session_state.messages.append({
@@ -324,69 +256,85 @@ def main():
                     "sections": []
                 })
                 
-            # Case B: Sections found, AI Provider is configured
-            elif api_configured:
-                with st.spinner(f"Analyzing IPC sections with {provider.name}..."):
-                    ai_response, api_error = provider.generate_response(
+            # Case B: Sections found, AI Provider is configured -> Progressive Token Streaming
+            elif provider.is_configured():
+                # Placeholder for subtle typing / thinking indicator before the first token arrives
+                thinking_placeholder = st.empty()
+                thinking_placeholder.markdown('<div class="thinking-indicator">Thinking...</div>', unsafe_allow_html=True)
+                
+                try:
+                    # Obtain live stream generator from AI provider
+                    token_stream = provider.stream_response(
                         user_query=query_text,
                         retrieved_sections=matching_sections
                     )
                     
-                if ai_response:
-                    st.markdown(ai_response)
-                    with st.expander(f"📚 View Retrieved IPC Sections ({len(matching_sections)})"):
-                        for s in matching_sections:
-                            st.markdown(
-                                f"**Section {s.get('Section')}: {s.get('section_title')}** "
-                                f"*(Chapter {s.get('chapter')}: {s.get('chapter_title')})*"
-                            )
-                            st.markdown(f"**Original Legal Text:**\n> {s.get('section_desc')}")
-                            st.divider()
+                    # Generator wrapper: clears thinking indicator on arrival of the first token
+                    def progressive_stream():
+                        cleared = False
+                        for chunk in token_stream:
+                            if not cleared:
+                                thinking_placeholder.empty()
+                                cleared = True
+                            yield chunk
+                        if not cleared:
+                            thinking_placeholder.empty()
                             
+                    # Streamlit's native streaming: displays tokens progressively with ChatGPT-like typing
+                    full_response = st.write_stream(progressive_stream())
+                    
+                    # Display Relevant IPC Section References after the stream completes
+                    if matching_sections:
+                        with st.expander(f"📚 Relevant IPC Sections ({len(matching_sections)})"):
+                            for s in matching_sections:
+                                st.markdown(
+                                    f"**Section {s.get('Section')}: {s.get('section_title')}** "
+                                    f"*(Chapter {s.get('chapter')}: {s.get('chapter_title')})*"
+                                )
+                                st.markdown(f"> {s.get('section_desc')}")
+                                st.divider()
+                                
                     st.session_state.messages.append({
                         "role": "assistant",
-                        "content": ai_response,
-                        "sections": matching_sections
-                    })
-                else:
-                    # Fallback when AI provider is unavailable (e.g. 503, 429, or network issue)
-                    notice_msg = (
-                        f"⚠️ **AI-generated explanations are temporarily unavailable.** ({api_error})\n\n"
-                        "Displaying the statutory provisions directly from the official IPC dataset below:"
-                    )
-                    st.warning(f"⚠️ **AI-generated explanations are temporarily unavailable.** ({api_error})")
-                    st.markdown("### 📋 Statutory Provisions (IPC Dataset)")
-                    for s in matching_sections:
-                        st.markdown(
-                            f"#### ⚖️ Section {s.get('Section')}: {s.get('section_title')}\n"
-                            f"**Chapter {s.get('chapter')}:** {s.get('chapter_title')}\n\n"
-                            f"**Original Legal Text:**\n"
-                            f"> {s.get('section_desc')}\n"
-                        )
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": notice_msg,
+                        "content": full_response,
                         "sections": matching_sections
                     })
                     
-            # Case C: Sections found, but AI Provider is not configured (Offline Retrieval Mode)
+                except Exception as err:
+                    # Clean up indicator if active
+                    thinking_placeholder.empty()
+                    
+                    # Graceful Fallback if streaming or API call encounters an issue
+                    fallback_intro = (
+                        "AI explanation is temporarily unavailable. "
+                        "Displaying relevant statutory provisions directly from the IPC dataset:"
+                    )
+                    st.info(fallback_intro)
+                    for s in matching_sections:
+                        st.markdown(
+                            f"**Section {s.get('Section')}: {s.get('section_title')}** "
+                            f"*(Chapter {s.get('chapter')}: {s.get('chapter_title')})*\n\n"
+                            f"> {s.get('section_desc')}"
+                        )
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": fallback_intro,
+                        "sections": matching_sections
+                    })
+                    
+            # Case C: Sections found, but AI Provider is not configured (Offline Fallback)
             else:
-                summary_heading = (
-                    f"⚠️ **AI-generated explanations are temporarily unavailable** ({provider.name} API key is not configured in `.env`).\n\n"
-                    "Displaying official legal text directly from the IPC dataset (`data/ipc.json`):\n\n"
-                )
-                st.info(summary_heading)
-                st.markdown("### 📋 Statutory Provisions (IPC Dataset)")
+                fallback_intro = "Displaying relevant statutory provisions directly from the IPC dataset:"
+                st.markdown(fallback_intro)
                 for s in matching_sections:
                     st.markdown(
-                        f"#### ⚖️ Section {s.get('Section')}: {s.get('section_title')}\n"
-                        f"**Chapter {s.get('chapter')}:** {s.get('chapter_title')}\n\n"
-                        f"**Original Legal Text:**\n"
-                        f"> {s.get('section_desc')}\n"
+                        f"**Section {s.get('Section')}: {s.get('section_title')}** "
+                        f"*(Chapter {s.get('chapter')}: {s.get('chapter_title')})*\n\n"
+                        f"> {s.get('section_desc')}"
                     )
                 st.session_state.messages.append({
                     "role": "assistant",
-                    "content": summary_heading,
+                    "content": fallback_intro,
                     "sections": matching_sections
                 })
 
