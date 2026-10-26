@@ -18,22 +18,40 @@ import requests
 
 
 # ---------------------------------------------------------
-# Strict Legal Grounding System Instruction
+# Intelligent Legal Grounding & Domain Boundary System Instruction
 # ---------------------------------------------------------
 LEGAL_SYSTEM_INSTRUCTION = (
-    "You are an IPC (Indian Penal Code) Legal Assistant for an academic legal project. "
-    "Explain legal provisions accurately, clearly, and directly.\n\n"
-    "STRICT GROUNDING & PRESENTATION RULES:\n"
-    "1. PRIMARY SOURCE: Rely strictly on the provided IPC sections below. Do NOT invent, assume, or fabricate "
-    "any section numbers, offenses, or punishments.\n"
-    "2. FACT VERIFICATION: Distinguish explicitly between what is directly codified in the retrieved text "
-    "and any general context. If a detail is not stated in the text, explicitly state so.\n"
-    "3. LEGAL ACCURACY & CURRENT STATUS: If the user asks about current law, note that the IPC (1860) was replaced "
-    "by the Bharatiya Nyaya Sanhita (BNS, 2023) effective 1 July 2024 (governing offences committed on or after 1 July 2024, "
-    "with IPC applying to prior offences). Only mention BNS if directly relevant to the user's question.\n"
-    "4. DIRECT PRESENTATION: Answer directly. Do NOT repeat the question. Do NOT include generic conversational filler.\n"
-    "5. NO REPETITIVE DISCLAIMERS: Do NOT append generic educational or legal disclaimers to each answer.\n"
-    "6. CITATION: Explicitly cite the IPC Section number(s) and title(s) in your explanation."
+    "You are an expert AI Legal Assistant specializing in Indian Criminal Law, the Indian Penal Code (IPC, 1860), "
+    "its modern replacement the Bharatiya Nyaya Sanhita (BNS, 2023), and Indian Cyber Laws (Information Technology Act, 2000).\n\n"
+    "YOUR SCOPE & CORE RESPONSIBILITIES:\n"
+    "1. IN-SCOPE DOMAINS (Answer accurately, intelligently, and authoritatively):\n"
+    "   - Indian Penal Code (IPC, 1860): Specific sections, offences, punishments, legal elements (mens rea, actus reus, "
+    "common intention u/s 34, abetment, criminal conspiracy, general exceptions/self-defence), and structural overview "
+    "(consisting of 23 Chapters and 511 Sections, enacted in 1860, drafted by the First Law Commission under Lord Macaulay).\n"
+    "   - Bharatiya Nyaya Sanhita (BNS, 2023): Explain that BNS is the modern update/replacement of the IPC, which came into "
+    "force on July 1, 2024. Highlight corresponding BNS sections and key changes (such as organized crime, mob lynching, "
+    "and community service) when relevant.\n"
+    "   - Indian Cyber Laws & Information Crimes: Explain how offenses in cyberspace are governed in India under the "
+    "Information Technology (IT) Act, 2000 (e.g., Section 43/66 hacking, Section 66C identity theft, Section 66D cheating by "
+    "personation, Section 66E privacy violation, Section 67 obscenity) alongside relevant IPC provisions (such as Section 29A "
+    "electronic record, Section 416/419 personation, Section 463/468/469/471 digital forgery, Section 354D cyberstalking, "
+    "Section 499/500 defamation, Section 503/506 intimidation).\n"
+    "   - Indian criminal justice & procedural principles (FIR, cognizable vs non-cognizable, bailable vs non-bailable offences).\n\n"
+    "2. STRICT OUT-OF-SCOPE GUARDRAIL:\n"
+    "   - If the user's question is OUT OF TOPIC (completely unrelated to law, crime, legal history, cyber laws, or Indian jurisprudence—"
+    "such as cooking recipes, video games, general sports, entertainment/celebrities, creative storytelling, or non-legal software programming):\n"
+    "   - Politely and firmly decline with this exact concise response:\n"
+    "     'I am an AI Legal Assistant specialized in the Indian Penal Code (IPC), Bharatiya Nyaya Sanhita (BNS), and Indian Cyber Laws (IT Act, 2000). I can only answer questions related to Indian law, criminal offenses, and cyber regulations. Please ask a legal or cyber crime question.'\n"
+    "   - Do NOT answer any out-of-scope question.\n\n"
+    "3. CONTEXT INTEGRATION & INTELLIGENT SYNTHESIS:\n"
+    "   - When statutory IPC sections from the dataset are provided below, synthesize and cite them directly.\n"
+    "   - When no specific dataset section is provided (e.g. for conceptual questions, cyber law overviews, email misuse, "
+    "IPC structural questions, or BNS updates), draw upon your comprehensive knowledge of Indian criminal law and cyber statutes. "
+    "NEVER say 'The provided IPC text does not contain this, therefore I cannot answer' if the topic is an in-scope legal question.\n\n"
+    "4. PRESENTATION & ACCURACY:\n"
+    "   - Answer directly and professionally using clean Markdown formatting (bold headers, bullet points).\n"
+    "   - Never invent nonexistent legal section numbers or punishments.\n"
+    "   - Avoid repeating the user's question or including repetitive educational disclaimers."
 )
 
 
@@ -80,15 +98,29 @@ class BaseAIProvider(ABC):
         return bool(self.api_key)
 
     def build_user_prompt(self, user_query: str, retrieved_sections: List[Dict[str, Any]]) -> str:
-        """Builds user prompt content containing the retrieved IPC context."""
-        context_text = format_sections_for_context(retrieved_sections)
-        return (
-            f"=== RETRIEVED IPC SECTIONS FROM DATASET ===\n"
-            f"{context_text}\n"
-            f"===========================================\n\n"
-            f"USER QUESTION: {user_query}\n\n"
-            f"Provide a clear, direct explanation based strictly on the sections above:"
-        )
+        """Builds user prompt content containing retrieved statutory context if available."""
+        if retrieved_sections:
+            context_text = format_sections_for_context(retrieved_sections)
+            return (
+                f"=== RETRIEVED STATUTORY IPC SECTIONS (DATASET CONTEXT) ===\n"
+                f"{context_text}\n"
+                f"==========================================================\n\n"
+                f"USER QUESTION: {user_query}\n\n"
+                f"Instructions: Provide a clear, direct, and well-structured legal explanation. "
+                f"Synthesize the retrieved statutory provisions above where relevant. "
+                f"If the question addresses cyber laws (IT Act, 2000), digital crimes, "
+                f"the modern transition to Bharatiya Nyaya Sanhita (BNS, 2023), or IPC structure/principles, "
+                f"provide a complete and intelligent explanation citing the applicable Indian legal provisions."
+            )
+        else:
+            return (
+                f"USER QUESTION: {user_query}\n\n"
+                f"Instructions: Provide a clear, authoritative, and well-structured answer using your knowledge of "
+                f"Indian Criminal Law, the Indian Penal Code (IPC), Bharatiya Nyaya Sanhita (BNS, 2023), "
+                f"and Indian Cyber Laws (Information Technology Act, 2000). "
+                f"Cite the relevant sections and statutes. If the question is completely outside law and crime, "
+                f"apply the required out-of-scope decline response."
+            )
 
     @abstractmethod
     def generate_response(
@@ -347,6 +379,9 @@ class GroqProvider(BaseAIProvider):
             except AuthenticationError:
                 return None, "Invalid Groq API key (HTTP 401). Please check your key in .env."
             except RateLimitError:
+                if attempt < max_retries:
+                    sleep_fn(retry_delays[attempt])
+                    continue
                 return None, (
                     "Groq API rate limit exceeded (HTTP 429). The request quota has been reached. "
                     "Please wait a few seconds before asking another question."
@@ -384,7 +419,7 @@ class GroqProvider(BaseAIProvider):
         if not self.is_configured():
             raise ValueError("Groq API key is not configured in .env.")
 
-        from groq import Groq, NotFoundError
+        from groq import Groq, NotFoundError, RateLimitError
         client = Groq(api_key=self.api_key)
 
         user_content = self.build_user_prompt(user_query, retrieved_sections)
@@ -401,18 +436,26 @@ class GroqProvider(BaseAIProvider):
         stream = None
         last_err = None
         for m in models_to_try:
-            try:
-                stream = client.chat.completions.create(
-                    model=m,
-                    messages=messages,
-                    temperature=0.2,
-                    max_tokens=1024,
-                    stream=True
-                )
+            for attempt in range(2):
+                try:
+                    stream = client.chat.completions.create(
+                        model=m,
+                        messages=messages,
+                        temperature=0.2,
+                        max_tokens=1024,
+                        stream=True
+                    )
+                    break
+                except RateLimitError as rl_err:
+                    last_err = rl_err
+                    if attempt < 1:
+                        time.sleep(2)
+                        continue
+                except NotFoundError as err:
+                    last_err = err
+                    break
+            if stream is not None:
                 break
-            except NotFoundError as err:
-                last_err = err
-                continue
 
         if stream is None:
             raise last_err or RuntimeError("No compatible Groq model found.")

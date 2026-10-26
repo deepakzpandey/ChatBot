@@ -236,34 +236,13 @@ def main():
         
         # 3. Generate Assistant Response (with Real-Time Streaming)
         with st.chat_message("assistant"):
-            # Case A: No sections found in dataset
-            if not matching_sections:
-                if requested_sec:
-                    no_results_text = (
-                        f"Section **{requested_sec}** was not found in the Indian Penal Code (IPC) dataset.\n\n"
-                        f"The IPC dataset does not contain Section {requested_sec}. Please verify the section number "
-                        "or check whether this provision belongs to other legislation (such as the IT Act, 2000 or the Bharatiya Nyaya Sanhita, 2023)."
-                    )
-                else:
-                    no_results_text = (
-                        "No matching sections were found in the Indian Penal Code (IPC) dataset for your query.\n\n"
-                        "Please verify your keywords or section number and try again."
-                    )
-                st.markdown(no_results_text)
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": no_results_text,
-                    "sections": []
-                })
-                
-            # Case B: Sections found, AI Provider is configured -> Progressive Token Streaming
-            elif provider.is_configured():
+            if provider.is_configured():
                 # Placeholder for subtle typing / thinking indicator before the first token arrives
                 thinking_placeholder = st.empty()
                 thinking_placeholder.markdown('<div class="thinking-indicator">Thinking...</div>', unsafe_allow_html=True)
                 
                 try:
-                    # Obtain live stream generator from AI provider
+                    # Obtain live stream generator from AI provider (synthesizes matching sections or general legal knowledge)
                     token_stream = provider.stream_response(
                         user_query=query_text,
                         retrieved_sections=matching_sections
@@ -283,7 +262,7 @@ def main():
                     # Streamlit's native streaming: displays tokens progressively with ChatGPT-like typing
                     full_response = st.write_stream(progressive_stream())
                     
-                    # Display Relevant IPC Section References after the stream completes
+                    # Display Relevant IPC Section References after the stream completes (if any were retrieved)
                     if matching_sections:
                         with st.expander(f"📚 Relevant IPC Sections ({len(matching_sections)})"):
                             for s in matching_sections:
@@ -303,13 +282,41 @@ def main():
                 except Exception as err:
                     # Clean up indicator if active
                     thinking_placeholder.empty()
+                    err_str = str(err)
                     
-                    # Graceful Fallback if streaming or API call encounters an issue
-                    fallback_intro = (
-                        "AI explanation is temporarily unavailable. "
-                        "Displaying relevant statutory provisions directly from the IPC dataset:"
-                    )
-                    st.info(fallback_intro)
+                    if "429" in err_str:
+                        error_notice = "AI service rate limit reached. Please wait a moment before sending another query."
+                    else:
+                        error_notice = "AI explanation is temporarily unavailable."
+                    
+                    # Graceful Fallback: if we have matching sections from local dataset, display them
+                    if matching_sections:
+                        fallback_intro = f"{error_notice} Displaying statutory provisions directly from the IPC dataset:"
+                        st.info(fallback_intro)
+                        for s in matching_sections:
+                            st.markdown(
+                                f"**Section {s.get('Section')}: {s.get('section_title')}** "
+                                f"*(Chapter {s.get('chapter')}: {s.get('chapter_title')})*\n\n"
+                                f"> {s.get('section_desc')}"
+                            )
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": fallback_intro,
+                            "sections": matching_sections
+                        })
+                    else:
+                        st.warning(error_notice)
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": error_notice,
+                            "sections": []
+                        })
+                        
+            # Offline Mode: AI Provider is not configured
+            else:
+                if matching_sections:
+                    fallback_intro = "Displaying relevant statutory provisions directly from the IPC dataset:"
+                    st.markdown(fallback_intro)
                     for s in matching_sections:
                         st.markdown(
                             f"**Section {s.get('Section')}: {s.get('section_title')}** "
@@ -321,22 +328,25 @@ def main():
                         "content": fallback_intro,
                         "sections": matching_sections
                     })
-                    
-            # Case C: Sections found, but AI Provider is not configured (Offline Fallback)
-            else:
-                fallback_intro = "Displaying relevant statutory provisions directly from the IPC dataset:"
-                st.markdown(fallback_intro)
-                for s in matching_sections:
-                    st.markdown(
-                        f"**Section {s.get('Section')}: {s.get('section_title')}** "
-                        f"*(Chapter {s.get('chapter')}: {s.get('chapter_title')})*\n\n"
-                        f"> {s.get('section_desc')}"
-                    )
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": fallback_intro,
-                    "sections": matching_sections
-                })
+                else:
+                    if requested_sec:
+                        no_results_text = (
+                            f"Section **{requested_sec}** was not found in the Indian Penal Code (IPC) dataset.\n\n"
+                            "Please verify the section number or configure an AI API key in `.env` to enable intelligent "
+                            "multi-statute search across BNS and IT Act provisions."
+                        )
+                    else:
+                        no_results_text = (
+                            "No matching statutory provisions were found in the local IPC dataset for this query.\n\n"
+                            "Please configure an AI API key in `.env` (Groq, Gemini, or OpenRouter) to enable "
+                            "intelligent responses for cyber laws, BNS updates, and legal concepts."
+                        )
+                    st.markdown(no_results_text)
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": no_results_text,
+                        "sections": []
+                    })
 
 
 if __name__ == "__main__":

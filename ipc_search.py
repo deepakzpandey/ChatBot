@@ -11,14 +11,43 @@ import re
 from typing import List, Dict, Tuple, Optional, Any
 
 
-# Common English grammatical and conversational stop words to exclude from keyword scoring
+# Common English grammatical, conversational, and broad structural stop words
 STOP_WORDS = {
     "what", "is", "the", "a", "an", "for", "in", "of", "to", "and", "or",
     "tell", "me", "about", "which", "are", "by", "under", "code", "indian",
-    "penal", "ipc", "law", "act", "can", "you", "i", "how", "does", "do",
+    "penal", "ipc", "law", "laws", "act", "can", "you", "i", "how", "does", "do",
     "explain", "give", "details", "on", "with", "from", "as", "at", "be",
     "this", "that", "there", "any", "all", "who", "whom", "whose", "why",
-    "section", "sections", "sec", "provisions", "provision"
+    "section", "sections", "sec", "provisions", "provision", "india",
+    "many", "much", "total", "chapter", "chapters", "versus", "vs", "difference"
+}
+
+# Concept and synonym mapping to connect modern and colloquial legal queries with statutory provisions
+CONCEPT_SYNONYMS: Dict[str, List[str]] = {
+    "email": ["electronic", "record", "personation", "forgery", "stalking"],
+    "e-mail": ["electronic", "record", "personation", "forgery", "stalking"],
+    "mail": ["electronic", "record", "personation", "forgery"],
+    "cyber": ["electronic", "record", "forgery", "cheating", "stalking"],
+    "internet": ["electronic", "record", "stalking", "forgery"],
+    "online": ["electronic", "record", "stalking", "cheating"],
+    "hacking": ["electronic", "record", "mischief", "theft"],
+    "phishing": ["cheating", "personation", "forgery"],
+    "spoofing": ["cheating", "personation", "forgery"],
+    "stalking": ["stalking", "electronic"],
+    "suicide": ["suicide", "attempt"],
+    "provocation": ["provocation", "grave", "sudden"],
+    "kidnapping": ["kidnapping", "abduction", "guardian"],
+    "kidnap": ["kidnapping", "abduction"],
+    "theft": ["theft", "stolen", "dishonestly"],
+    "murder": ["murder", "culpable", "homicide"],
+    "homicide": ["murder", "culpable", "homicide"],
+    "cheating": ["cheating", "personation", "fraudulent"],
+    "forgery": ["forgery", "false document", "electronic record"],
+    "bribe": ["bribery", "gratification", "public servant"],
+    "corruption": ["gratification", "public servant", "illegal"],
+    "dowry": ["dowry", "cruelty", "death"],
+    "defamation": ["defamation", "reputation", "harming"],
+    "intimidation": ["intimidation", "threat", "injury"],
 }
 
 
@@ -161,20 +190,49 @@ def extract_section_numbers(query: str) -> List[str]:
     return []
 
 
-def tokenize(text: str) -> List[str]:
+def clean_text_input(text: str) -> str:
+    """
+    Normalizes typos such as common keyboard slips (e.g. ';' for 'l', e.g. 'exp;ain' -> 'explain')
+    and strips extraneous punctuation.
+    """
+    if not text:
+        return ""
+    # Correct keyboard slip where ';' replaces 'l' inside a word
+    cleaned = re.sub(r'([a-zA-Z]);([a-zA-Z])', r'\1l\2', text)
+    # Strip non-alphanumeric punctuation except hyphens
+    cleaned = re.sub(r'[^\w\s\-]', ' ', cleaned)
+    return cleaned
+
+
+def tokenize(text: str, expand_concepts: bool = True) -> List[str]:
     """
     Breaks a text string into normalized lowercase alphanumeric tokens,
-    filtering out short words and common stop words.
+    filtering out short words and common stop words. Optionally expands
+    recognized concept keywords with legal synonyms.
     """
-    words = re.findall(r"\b[a-zA-Z0-9]+\b", text.lower())
-    return [w for w in words if w not in STOP_WORDS and len(w) > 1]
+    cleaned = clean_text_input(text)
+    words = re.findall(r"\b[a-zA-Z0-9]+\b", cleaned.lower())
+    base_tokens = [w for w in words if w not in STOP_WORDS and len(w) > 1]
+    
+    if not expand_concepts:
+        return base_tokens
+        
+    expanded = list(base_tokens)
+    for tok in base_tokens:
+        for concept_key, synonyms in CONCEPT_SYNONYMS.items():
+            if concept_key in tok:
+                for syn in synonyms:
+                    if syn not in expanded and syn not in STOP_WORDS:
+                        expanded.append(syn)
+                        
+    return expanded
 
 
 def search_ipc_sections(
     query: str,
     dataset: List[Dict[str, Any]],
     max_results: int = 4,
-    min_score: float = 12.0
+    min_score: float = 6.0
 ) -> List[Dict[str, Any]]:
     """
     Searches the IPC dataset.
@@ -184,8 +242,7 @@ def search_ipc_sections(
     2. Match requested section numbers exactly as strings ('34', '34A', '120A', '120B').
     3. Display exact section first; do NOT include unrelated sections whose descriptions
        contain matching digits (e.g., '1934' or 'Act 34 of 1934') or unrelated keywords.
-    4. For general queries ('What is theft under IPC?'), retain weighted keyword search
-       and return only the most relevant results.
+    4. For general queries, use intelligent keyword & concept search with stem matching.
     
     Returns:
         List of matching section dictionaries.
@@ -193,12 +250,12 @@ def search_ipc_sections(
     if not query or not query.strip() or not dataset:
         return []
         
-    query_clean = query.strip()
+    query_clean = clean_text_input(query.strip())
     
     # ------------------------------------------------------------------
     # Step 1: Detect explicit section number request (e.g. "IPC 34", "Section 34A")
     # ------------------------------------------------------------------
-    requested_sec = detect_section_request(query_clean)
+    requested_sec = detect_section_request(query.strip())
     
     if requested_sec:
         # Search dataset for an exact string match on Section
@@ -210,8 +267,7 @@ def search_ipc_sections(
                 break
                 
         # Determine if the query contained additional substantive keywords
-        tokens = tokenize(query_clean)
-        # Exclude the section identifier and digits that are part of it
+        tokens = tokenize(query_clean, expand_concepts=False)
         remaining_tokens = [
             t for t in tokens 
             if t.upper() != requested_sec and not (t.isdigit() and t in requested_sec)
@@ -220,49 +276,45 @@ def search_ipc_sections(
         # If the query was purely asking for this section (e.g., 'ipc 34', 'section 34', 'what is section 34')
         if not remaining_tokens:
             if exact_match:
-                # Return strictly the requested section with no unrelated matches
                 return [exact_match]
             else:
-                # Requested section does not exist (e.g., 'Section 34A', 'Section 999')
-                # Never return unrelated sections
                 return []
         else:
-            # Compound query (e.g., "Section 302 murder penalty")
             if not exact_match:
-                # Section requested does not exist
                 return []
                 
-            # Put exact match first
             results = [exact_match]
-            
-            # Search for related sections based on remaining keywords, without matching numbers
             cleaned_query_phrase = " ".join(remaining_tokens)
             scored_candidates = []
             
             for item in dataset:
                 if str(item.get("Section", "")).strip().upper() == requested_sec:
-                    continue  # Already included first
+                    continue
                     
                 score = 0.0
                 title_lower = item["section_title"].lower()
                 desc_lower = item["section_desc"].lower()
                 chap_lower = item["chapter_title"].lower()
                 
-                # Match phrase using word boundaries
                 if cleaned_query_phrase and re.search(r"\b" + re.escape(cleaned_query_phrase) + r"\b", title_lower):
                     score += 30.0
                     
                 for token in remaining_tokens:
-                    # Ignore purely numeric tokens to avoid matching year/act numbers
                     if token.isdigit():
                         continue
                     if re.search(r"\b" + re.escape(token) + r"\b", title_lower):
                         score += 15.0
+                    elif len(token) >= 4 and token[:5] in title_lower:
+                        score += 10.0
+                        
                     if re.search(r"\b" + re.escape(token) + r"\b", chap_lower):
                         score += 5.0
+                        
                     desc_matches = len(re.findall(r"\b" + re.escape(token) + r"\b", desc_lower))
                     if desc_matches > 0:
                         score += min(desc_matches * 2.0, 8.0)
+                    elif len(token) >= 4 and token[:5] in desc_lower:
+                        score += 3.0
                         
                 if score >= min_score:
                     item_copy = item.copy()
@@ -276,11 +328,11 @@ def search_ipc_sections(
     # ------------------------------------------------------------------
     # Step 2: General keyword search (e.g. "What is theft under IPC?")
     # ------------------------------------------------------------------
-    tokens = tokenize(query_clean)
+    tokens = tokenize(query_clean, expand_concepts=True)
     if not tokens:
         return []
         
-    cleaned_query_phrase = " ".join(tokens)
+    cleaned_query_phrase = " ".join(tokenize(query_clean, expand_concepts=False))
     scored_results = []
     
     for item in dataset:
@@ -290,30 +342,31 @@ def search_ipc_sections(
         desc_lower = item["section_desc"].lower()
         chap_title_lower = item["chapter_title"].lower()
         
-        # Priority A: Exact title match (e.g. title is exactly 'Theft')
-        if title_lower == cleaned_query_phrase:
-            score += 60.0
-        elif cleaned_query_phrase and re.search(r"\b" + re.escape(cleaned_query_phrase) + r"\b", title_lower):
-            score += 35.0
+        # Priority A: Exact phrase match in title
+        if cleaned_query_phrase and cleaned_query_phrase in title_lower:
+            score += 40.0
             
-        # Priority B: Token-level keyword matching with word boundaries
+        # Priority B: Token-level keyword matching
         for token in tokens:
-            # Exact section number match if user typed a number as keyword
             if token.upper() == sec:
                 score += 50.0
                 
-            # Title word match
+            # Exact word match in title
             if re.search(r"\b" + re.escape(token) + r"\b", title_lower):
                 score += 20.0
+            elif len(token) >= 4 and token[:5] in title_lower:
+                score += 10.0
                 
-            # Chapter word match
+            # Chapter title match
             if re.search(r"\b" + re.escape(token) + r"\b", chap_title_lower):
                 score += 5.0
                 
-            # Description word match using word boundaries
+            # Description match
             desc_matches = len(re.findall(r"\b" + re.escape(token) + r"\b", desc_lower))
             if desc_matches > 0:
                 score += min(desc_matches * 2.0, 10.0)
+            elif len(token) >= 4 and token[:5] in desc_lower:
+                score += 3.0
                 
         if score >= min_score:
             result_item = item.copy()
